@@ -1,3 +1,486 @@
+<!-- 中文说明开始 -->
+# 📖 中文详细说明（dsh-purge）
+
+> **阅读顺序说明**：本文件最上面这一大段是**中文详细说明**，用大白话写给第一次接触这个项目的人；下面从 `---` 之后开始，是**上游项目原封不动的原始 README**，一字未删、未改写。
+>
+> 只想看原作者的原文，可以直接跳到下半部分。
+
+---
+
+## 1️⃣ 这是什么？
+
+一句话说清楚：**给 DeepSeek Harness 这个 AI 编程工具打一个"补丁"，把它的安全限制拆掉，让它能真正干活的插件。**
+
+先解释三个名词：
+
+| 名词 | 大白话解释 |
+|------|-----------|
+| **DeepSeek Harness（DSH）** | 深度seek 官方出的 AI 编程工具，跟 Claude Code 一个路数。你在终端里跟它说话，它帮你写代码、跑命令、读文件 |
+| **插件（plugin）** | 别人写好的一段代码，装进 DSH 里，给它加新功能或改行为。DSH 的插件是用 Node.js 写的 |
+| **破甲 / 清洗 / 注入** | DSH 默认会拦着模型不干某些事（尤其是安全相关的请求）。这个插件把那些拦截点改掉，让模型按你的指令走 |
+
+打个比方：**DSH 是个能力很强但有点谨慎的员工，这个插件相当于给他配了个"你说什么就照做"的授权书**，还能自己给他换一套更高效的工作提示词。
+
+它做的事分两大块：
+
+| 板块 | 干什么 |
+|------|--------|
+| **清洗（Clean）** | 给 DSH 打补丁、换提示词、管规则集、管 Skill、开关各种限制 |
+| **演练台（Drill）** | 一个受控的**红队演练**环境：管理你的资产清单、加载渗透测试技能、跑攻防流程（**只能用于你自己有权管理的机器或已书面授权的靶场**） |
+
+> ⚠️ **边界说清楚**：这个插件**只作用于你自己电脑上装好的官方 DSH**，不是公网扫描器，不打别人的站点。仓库里没有木马，也没有对外攻击载荷。作者在 README 里专门写了一条法律声明，规定了中国大陆/香港/澳门网段默认禁止访问（除非你事先登记了自己的那一台服务器）。
+
+---
+
+## 2️⃣ 适合谁用？能解决什么问题？
+
+### ✅ 典型使用者
+
+| 你是谁 | 你会得到什么 |
+|--------|-------------|
+| **重度 DSH 用户** | 每天用 DSH 写代码，但总被各种安全拦截打断，想让模型顺畅执行 |
+| **安全研究员 / 红队工程师** | 想在**自己有权管理的本机或授权靶场**里做受控的红队评测 |
+| **提示词调优者** | 想给不同模型配不同的提示词，而不是所有人共用一套 |
+| **想看清"模型到底答不答"的人** | DSH 自己会改提示词、审批门、沙箱；这个插件把"宿主拦截"和"模型拒绝"**分成两层**看，避免误判 |
+| **多平台用户** | 官方 Web 版（`dsh web`）和官方桌面 EXE 都支持，各装各的、各点各的「应用」 |
+
+### 🎯 它能帮你解决的具体麻烦
+
+1. **「模型老是拒绝我，明显能做却不做。」**
+   → 插件把宿主的审批门、沙箱、限制项拆掉，模型能按你的指令执行。
+
+2. **「我想知道是模型不愿意答，还是 Harness 拦下来了。」**
+   → 这是本插件最核心的设计。Harness 不只是把问题丢给模型，它在运行时还会改提示词、审批门、沙箱、会话格式。只看「模型答不答」会把宿主拦截误判成模型拒绝。本插件在你自己的安装里把这两层分开。
+
+3. **「换模型就要重写一遍提示词，太麻烦。」**
+   → 不同模型可以换不同提示词，默认那套是面向国产模型「小码酱」调过的。
+
+4. **「官方桌面端和 Web 端我都在用，得装两遍吗？」**
+   → 要装两遍，但**互不干扰**：Web 的补丁只动 Web，桌面端的只动桌面端。
+
+5. **「我想做渗透测试，但不想被工具链的合规问题绊住。」**
+   → 演练台提供资产库、23 个红队技能、预设配置，且**所有网络范围都受本地白名单约束**。
+
+### ❌ 不适合谁
+
+- 打算**拿去卖 / 卖课 / 白标**的（当前是商业许可，必须先取得授权，见下半部分）
+- 想要**MIT 开源**的（上游已明确改证，本分支也不再挂 MIT）
+- 想在**中国大陆 / 香港 / 澳门**的服务器上跑的（默认禁止，只有事先登记的那一台 IP / 主机名例外）
+- 想要**新版本**的 —— 上游已于 2026-10-27 起停止在 GitHub 发版，后续包只走 Telegram 频道（见下半部分「更新」章节）
+
+---
+
+## 3️⃣ 核心功能
+
+| # | 功能 | 用大白话说 |
+|---|------|-----------|
+| 1 | **补丁引擎** | 一组编号的补丁（当前到 #89 附近），分组列出状态，一键应用 / 还原 / 卸载；重复应用是幂等的（点多少次结果一样） |
+| 2 | **提示词注入** | 每轮对话都可以覆盖系统提示词；插件自带一份加密的默认提示词，面板里看到的默认内容就是它 |
+| 3 | **多规则集** | 可以维护多套 `AGENTS.md` / `CLAUDE.md`，按需启用，启用的会写进 `$DSH_HOME` |
+| 4 | **Skill 管理** | 导入压缩包或文件夹到 DSH 的官方 `skills/<id>/SKILL.md` 目录，由 DSH 负责加载和 `/名称` 调用；删插件不会删你的 Skill |
+| 5 | **一键还原** | 每个被改的文件应用前都备份成 `<文件>.dshpurge.bak`，随时能一键还原回原版 |
+| 6 | **自动重应用** | 启动时自动检查补丁状态并重新应用，npm 升级盖掉 `node_modules` 之后不用手动再改文件 |
+| 7 | **命令行工具** | `dsh-purge --status / --apply / --revert / --uninstall / --edit` 五个命令全套 |
+| 8 | **聊天内命令** | `/purge status|apply|revert|uninstall|edit|help`、`/rules`、`/skills`、`/rewind` 都能直接在对话框里敲 |
+| 9 | **回退一轮** | 输入框旁的「回退一次」「回退上一轮」，配合官方的 `session.fork({ atSeq })` 把上一轮撤回，新会话接上上下文 |
+| 10 | **演练台（Drill）** | 授权后可用：资产库（SQLite 事实库）、23 个红队技能、预设配置、多角色并发（最多 3 个执行角色） |
+| 11 | **网段白名单** | 「自己的服务器」面板每行登记一台，保存到 `$DSH_HOME/net-scope-allow.txt`；密钥、密码、网段、通配符一律丢弃 |
+| 12 | **工具调用桥接** | 模型可以调 `purge_status` / `purge_apply` / `purge_revert` 等工具自己管理补丁 |
+| 13 | **能力协议** | `capabilityProtocol` 开关，用于处理宿主能力探测的握手 |
+| 14 | **Hooks 绕过** | `hooksDenyBypass` 开关，配合 0.2.0 的原生 system 槽注入一起用 |
+| 15 | **失败自动重试** | `autoRetry` / `retryMax`（默认 3 次）；工具调用返回畸形 JSON 时自动重新生成一次 |
+| 16 | **双端支持** | 官方 `dsh web`（profile `web`）和官方桌面 EXE（profile `desktop`），分开安装、分开应用 |
+
+---
+
+## 4️⃣ 怎么快速上手？
+
+> ⚠️ 下面的命令全部来自本仓库真实文件（`package.json`、`README.md` 原文、`bin/dsh-purge.js`、`cordis.patch.yml`、`scripts/redteam-setup.sh`），不是编的。
+
+### 前置条件
+
+| 依赖 | 版本 | 必需？ | 说明 |
+|------|------|--------|------|
+| Node.js | ≥ 18 | ✅ | Windows 上想**无闪窗**运行需要 **Node ≥ 22** |
+| 官方 DeepSeek Harness | dsh **0.2**（桌面 0.2.0-rc.2 / 0.2.1-rc.2） | ✅ | 更早的 0.1.x 要用 1.1.39 及更早版本的插件 |
+| pnpm | — | ⚠️ 仅手动安装时需要 | 找不到就用官方 dsh 自带的 pnpm |
+
+> ❗ **npm 上没有 `dsh-purge` 这个包**，安装必须走 GitHub 归档，不要 `pnpm add dsh-purge`（会 404）。
+
+### 方式 A：用官方 dsh 命令装（推荐）
+
+**Web 端（官方 `dsh web`）：**
+
+```sh
+dsh plugin --profile web add https://github.com/aiwozhonghua81/dsh-purge/archive/refs/heads/master.tar.gz
+```
+
+**桌面端（官方 EXE）：**
+
+```sh
+dsh plugin --profile desktop add https://github.com/aiwozhonghua81/dsh-purge/archive/refs/heads/master.tar.gz
+```
+
+> 当前目录已经是本仓库时，把上面的归档地址换成 `add .`。
+> `dsh` 不在 PATH 时走下面的「方式 B」。
+
+### 方式 B：手动安装
+
+**第 1 步：找到真正在用的 `$DSH_HOME`**
+
+按这个顺序找：
+
+1. `DSH_HOME` 环境变量
+2. dsh 启动器旁边的 `.dsh`（便携包）
+3. `%USERPROFILE%\.dsh` 或 `~/.dsh`
+4. `%APPDATA%` / `%LOCALAPPDATA%\DeepSeek Harness\dsh-home`
+
+认目录的标志：名字是 `.dsh`（官方 EXE 偶见 `dsh-home`），里面有 `profiles`，且至少有一个 `profiles/<名>/package.json`。
+
+Windows PowerShell 列候选：
+
+```powershell
+$cands = @()
+if ($env:DSH_HOME) { $cands += $env:DSH_HOME }
+$cands += "$env:USERPROFILE\.dsh"
+$dsh = Get-Command dsh -ErrorAction SilentlyContinue
+if ($dsh) {
+  $dir = Split-Path $dsh.Source
+  $cands += @((Join-Path $dir ".dsh"), (Join-Path (Split-Path $dir) ".dsh"), (Join-Path (Split-Path (Split-Path $dir)) ".dsh"))
+}
+$cands += @("$env:APPDATA\DeepSeek Harness\dsh-home", "$env:LOCALAPPDATA\DeepSeek Harness\dsh-home")
+$cands | Select-Object -Unique | Where-Object { $_ -and (Test-Path (Join-Path $_ "profiles")) }
+```
+
+确认方法：`profiles/web/package.json` 里 `"name"` 应该是 `dsh-profile-web`（桌面是 `dsh-profile-desktop`）。
+
+**第 2 步：把插件放到 `$DSH_HOME/plugins/dsh-purge`**
+
+```sh
+git clone https://github.com/aiwozhonghua81/dsh-purge.git "$DSH_HOME/plugins/dsh-purge"
+```
+
+没有 git 就下载 [master.tar.gz](https://github.com/aiwozhonghua81/dsh-purge/archive/refs/heads/master.tar.gz)，解压后把 `dsh-purge-master` 改名成 `dsh-purge`，整夹放进 `plugins` 下。
+
+**第 3 步：改对应 profile 的 `package.json`（先备份）**
+
+只改你**实际在用的那个** profile：Web → `$DSH_HOME/profiles/web/package.json`；桌面 → `$DSH_HOME/profiles/desktop/package.json`。**只追加两处**：
+
+```json
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "dsh-purge": "file:../../plugins/dsh-purge"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-purge"
+      ],
+      "patchReload": "live"
+    }
+  }
+}
+```
+
+要点：
+
+- `dependencies` 里加 `"dsh-purge": "file:../../plugins/dsh-purge"`（**必须是相对路径**，不能写绝对路径）
+- `dsh.profile.bundles` **末尾**追加 `"dsh-purge"`（已有就不要再加）
+- 原有依赖、`patchReload`、其它插件、版本号**都不要动**
+- JSON 逗号别漏（新增项前面要有逗号，最后一项后面不能有多余逗号）
+
+**第 4 步：在刚改的那个 profile 目录里装依赖**
+
+```sh
+cd "$DSH_HOME/profiles/web"   # 或 profiles/desktop
+pnpm install
+```
+
+成功标志：出现 `profiles/<web|desktop>/node_modules/dsh-purge/package.json`。
+
+**第 5 步：应用补丁**
+
+1. **完全退出**该宿主（Web 关掉 `dsh web`；桌面端退出托盘）
+2. 重新启动
+3. 点会话标题旁的 **dsh-purge** → **清洗** 页 → 点 **「应用」**
+4. 应用成功会**自动重启**一次，让补丁进入当前进程
+5. **新开一轮对话**，注入才进当前会话
+
+### 装完怎么确认成功了？
+
+| 检查点 | 期望结果 |
+|--------|---------|
+| 会话标题旁 | 出现 **dsh-purge** 按钮，点开有「清洗」和「演练台」两页 |
+| 聊天里敲 `/purge status` | 打出 `DSH_HOME` 路径和补丁列表，路径应该是你正在用的那一份 |
+| 没装的可选包 | 显示「跳过」，不挡住应用完成 |
+
+### 命令行用法
+
+```sh
+# CLI
+dsh-purge --status       # 显示状态：宿主类型、DSH_HOME、补丁逐条状态、shim 路径
+dsh-purge --apply        # 应用全部清洗（提示词 + 代码 + shim + override）
+dsh-purge --revert       # 回滚还原
+dsh-purge --uninstall    # 卸载插件（已应用则先还原）
+dsh-purge --edit         # 编辑注入文件 prompt-inject.md
+
+# 聊天里
+/purge status | apply | revert | uninstall | edit | help
+/rules list | use <id> | create <id> | delete <id> | reset | help
+/skills list | import <压缩包或文件夹> | create <id> [说明] | delete <id> | help
+/rewind
+
+# 模型可调用的工具
+purge_status   purge_apply   purge_revert
+```
+
+### 本地语法校验（不改任何东西，只检查）
+
+```sh
+node --check lib/index.js
+node --check lib/core.js
+node --check lib/rewind.js
+node --check lib/skills.js
+node --check client.js
+```
+
+### 装演练台环境（可选）
+
+演练台需要一些外部工具链。仓库里带了安装脚本 `scripts/redteam-setup.sh`，插件启动时会自动把它落到 `$DSH_HOME/redteam/setup.sh`：
+
+```sh
+# 插件会自动落一份；你可以手动执行
+bash "$DSH_HOME/redteam/setup.sh"
+```
+
+> 🔴 **红线**：插件**不会替你下载或安装任何安全工具**。需要什么，脚本会告诉你获取位置，**由你自己取、自己执行**。缺的技能只会降级（还能用侦察向技能开工，只是拿不到需要落地的成果）。
+
+---
+
+## 5️⃣ 常见问题 / 注意事项
+
+### ❓ 会踩的坑
+
+| 现象 | 原因 | 怎么办 |
+|------|------|--------|
+| **装完补丁没生效** | 只把插件写进 profile **不会**改 `@deepseek-ai` | 必须**完全退出宿主 → 重开 → 点「应用」→ 自动重启 → 新开一轮对话** |
+| **找不到「应用」按钮** | 改错了另一份 `.dsh` | 本机常有两份 `.dsh`，回到第 1 步用 `profiles/web/package.json` 里的 `name` 核对 |
+| **点了「应用」说找不到目标** | 没定位到 `DSH_HOME` | 设 `DSH_BASE` 环境变量指到含 `dsh-agent-instructions/lib` 的 `@deepseek-ai` 目录；**找不到时插件不改文件** |
+| **`pnpm install` 报 `Could not resolve`** | `file:` 路径不对 | 必须是 `file:../../plugins/dsh-purge`（相对 profile 目录），不是绝对路径 |
+| **JSON 解析失败** | 手改 `package.json` 逗号漏了 | 修逗号，或用备份还原 |
+| **标准模式能跑、极简 / PTC 被拦** | preset 里 `run_code` 或 plan 拦截句没洗净，或内置 minimal 缺 `agent-instructions` | 升到 **1.1.61+**，然后**完全退出宿主 → 应用 → 自动重启 → 新开一轮对话**。只换 preset 不重应用是没用的 |
+| **命令跑得慢，后面的调用全在等** | DSH 按顺序执行同一批的 Bash 调用，旧版把前台等待从 60 秒提到了 10 分钟 | v1.1.x 的补丁 #21 已把带插件标记的旧值恢复成官方 60 秒。也可在 `$DSH_HOME/profiles/web/cordis.patch.yml` 里加 `bash-sandbox` 的 `timeoutMs` |
+| **面板里的设置改了重启又变回去** | 面板改动落盘在 `data/settings-overrides.json`，**优先级高于环境变量** | 启动日志里会点名被覆盖的字段，删掉那个文件即可把控制权交回 `.env` |
+| **`npm` 上找不到 `dsh-purge`** | 这个包**从来没发布到 npm** | 走 GitHub 归档地址，或插件市场（但市场一键若仍去拉 npm 包名会 404） |
+| **演练台进不去** | 没读声明、没等倒计时、没滚到文末、没勾选三项 | 第一次进演练台需要完成这四步；「清洗」页不需要 |
+| **提示词保存了但对话里没变化** | 补丁没应用，或旧进程还在跑 | 应用成功会自动重启；重启后**新开一轮对话** |
+| **「自己的服务器」填了没用** | 只认 IP 或完整主机名，密钥密码网段通配符会被丢弃 | 每行只写一台，保存后看 `$DSH_HOME/net-scope-allow.txt` |
+
+### ⚠️ 必须知道的注意事项
+
+1. **改的是你本机的 DSH 安装** —— 插件改的是本机 `@deepseek-ai/*` 包里的渲染文案、默认策略和执行逻辑，以及你目录下的覆盖文件。每个被改文件都有 `.dshpurge.bak` 备份，`/purge revert` 能还原。
+2. **升级后原文对不上会显示跳过** —— 不会乱改文件，这次应用仍算完成。
+3. **不改动非 `@deepseek-ai` 的第三方插件源仓库** —— 启动时的 CMD 无感只会**尽力**修补已装的 doctor / market / 梁神 / mnemon，属运行时补丁。
+4. **署名要求** —— 用这个项目的名字、思路、代码或提示词，**必须写明来源仓库**。不署名、藏来源、改头换面当自己的，作者会追究。
+5. **许可证已改** —— 当前分支挂的是**商业软件许可**，不是 MIT。要付费卖插件 / 卖课 / 白标 / 给别人当产品，先看 `LICENSE-COMMERCIAL.md` 走授权流程。
+6. **上游已停止在 GitHub 发版** —— 2026-10-27 起新版本只走 Telegram 频道，本 fork 不会同步到那些新版本。
+7. **网络范围红线** —— 中国大陆 / 香港 / 澳门网段默认禁止，唯一例外是你事先登记的那一台确切 IP 或完整主机名。
+8. **只在你有权管理的地方用** —— 本机、离线靶标、授权演练靶场、合规实验室。严禁在未授权的公网系统或生产业务上运行。
+
+---
+
+## 6️⃣ 目录结构速览
+
+```
+dsh-purge/
+├── bin/
+│   └── dsh-purge.js              # 命令行入口：--status / --apply / --revert / --uninstall / --edit
+├── lib/                          ← 插件核心逻辑（约 2.1 万行）
+│   ├── index.js                  # 主入口：导出 apply / revert / uninstall / status 等
+│   ├── core.js                   # 核心：补丁清单、备份还原、shim 注入、状态收集
+│   ├── identity.js               # 身份与加密提示词的读取（不从宿主磁盘读提示词）
+│   ├── host.js                   # 宿主识别（web / desktop / gui / tui）
+│   ├── web.js / desktop.js       # Web 端 / 桌面端各自的路径探测与补丁
+│   ├── rules.js                  # 规则集管理（AGENTS.md / CLAUDE.md）
+│   ├── skills.js                 # Skill 导入 / 导出 / 压缩包解压
+│   ├── rewind.js                 # 「回退一轮」实现（对接 session.fork）
+│   ├── net-scope.js              # 网络范围白名单（自己的服务器）
+│   ├── update.js                 # 官方更新检查与切换（正式版 / 测试版）
+│   ├── official-update.js        # 官方更新脚本与 wscript 封装
+│   ├── reapply.js                # 启动时自动重应用补丁
+│   ├── restart-web.js            # Web 端重启
+│   ├── restart-desktop.js        # 桌面端重启
+│   ├── uninstall.js              # 卸载：先还原再删文件
+│   ├── uninstall-restart.js      # 卸载后重启宿主
+│   ├── extract-asar.js           # 桌面端 asar 解包（补丁要改打包后的文件）
+│   ├── child-process-hide.mjs    # Windows 隐藏子进程闪窗
+│   ├── hide-console.js           # 控制台隐藏处理
+│   ├── hooks-deny.js             # 拦截点绕过
+│   ├── capability-protocol.js    # 能力协议握手
+│   ├── continue-retry.js         # 工具调用失败后的续跑与重试
+│   ├── settle-policy.js          # 会话收尾策略
+│   ├── preset-default.js         # 默认预设处理
+│   ├── phase1-keep.js            # 第一阶段保留逻辑
+│   ├── mnemon-settings.js        # 与「梁神」插件的设置对接
+│   ├── table-key.js / table-read.js  # 表格型密钥的读写
+│   ├── zip-extract.js            # 压缩包处理
+│   ├── asset-table.js            # 资产表结构
+│   ├── drill-grant.js            # 演练台授权流程
+│   ├── default-prompt-inject.zh.md   # 默认注入提示词（中文版）
+│   ├── default-prompt-inject.en.md   # 默认注入提示词（英文版）
+│   └── redteam/                  ← 演练台模块
+│       ├── index.js              # 自举：首次把预设和技能落到 $DSH_HOME
+│       ├── store.js / store-core.js  # 资产事实库（SQLite）
+│       ├── tools.js              # 红队工具集
+│       ├── ui.js                 # 演练台界面
+│       ├── schema.js             # 数据结构定义
+│       ├── score-rules.js        # 评分规则
+│       ├── validate.js           # 输入校验
+│       ├── ip-utils.js           # IP 处理
+│       ├── platform-config.js    # 平台配置
+│       ├── preset-composition.js # 预设组合
+│       ├── report-replay.js      # 报告回放
+│       ├── role-section.js       # 角色分工
+│       └── skill-availability.js / skill-fixes.js  # 技能可用性与修复
+├── client.js                     # 侧栏前端（约 8800 行）：清洗页 + 演练台页
+├── cordis.patch.yml              # 插件在 DSH 里的注册配置（补丁 id、注入、开关）
+├── presets/
+│   └── redteam/                  # 演练台预设
+│       ├── preset.yml            # 「红队模式」预设定义
+│       ├── agent.cordis.yml      # 红队模式的 cordis 配置
+│       └── anchor-gate.mjs       # 锚点闸门
+├── skills/
+│   └── redteam/                  # 随包分发的 23 个红队技能
+│       ├── redteam-setup.md      # 首次使用引导
+│       ├── fofa-recon.md / passive-recon.md / recon-pipeline.md / asset-correlation.md
+│       ├── active-scan.md / nuclei-scan.md / web-fingerprint.md / dir-bruteforce.md
+│       ├── cn-proxy-pool.md / browser-automation.md / kimi-webbridge.md
+│       ├── credential-attack.md / unauth-exploit.md / lateral-movement.md
+│       ├── chisel-tunnel.md / frp-tunnel.md / suo5-tunnel.md
+│       ├── shell-handler.md / gogo-intranet.md / fscan-intranet.md
+│       ├── vps-reverse-shell.md / webshell-toolkit.md
+├── scripts/
+│   ├── redteam-setup.sh          # 演练台环境安装脚本（自动落到 $DSH_HOME/redteam/setup.sh）
+│   ├── build-client.mjs          # 构建侧栏前端
+│   ├── embed-default-prompt.mjs  # 把默认提示词编译进产物
+│   ├── patch-client-dock.mjs     # 桌面端客户端补丁脚本
+│   └── export-engagement-report.mjs  # 导出作业报告
+├── docs/
+│   ├── banner.svg                # README 顶部横幅
+│   ├── preview/                  # 界面截图（清洗 / 演练台 / 补丁 / 规则集 / 自己的服务器）
+│   ├── notice/                   # 违规商用公示截图
+│   ├── drill-auth-legal.html     # 演练台授权声明页
+│   ├── redteam-upstream-DISCLOSURE  # 红队能力的来源披露
+│   ├── redteam-upstream-LICENSE      # 上游许可证副本
+│   ├── v1.1.34-prompt-inject.md   # 1.1.34 版提示词注入文档
+│   ├── 修改文档.md / 注入方式改造方案-1.1.34化.md
+├── package.json                  # 包元信息：name=dsh-purge, version=1.1.71, bin, exports, dsh 配置
+├── README.md / README.zh-CN.md / README.en.md   # 三语 README（zh-CN 与 README.md 同为中文）
+├── LICENSE                       # 商业软件许可（当前分支）
+├── LICENSE-COMMERCIAL.md        # 商业授权条款
+├── release-notes.md              # 发布说明
+├── screenshots.json              # 截图清单
+└── .github/workflows/release.yml # 发布流水线
+```
+
+### 运行时文件在哪？
+
+都放在 `$DSH_HOME` 下（没设 `DSH_HOME` 时按 `.dsh` → `~/.dsh` 顺序找）：
+
+| 运行时文件 | 作用 |
+|-----------|------|
+| `prompt-inject.md` | 你的注入提示词（用户文件，还原时保留） |
+| `rules/` | 规则集文件 |
+| `skills/` | 导入的 Skill（`skills/<id>/SKILL.md`） |
+| `net-scope-allow.txt` | 「自己的服务器」白名单 |
+| `redteam/` | 演练台数据（资产库 SQLite、`setup.sh`、工具链目录） |
+| `redteam/skills` | 随包技能的落地位置 |
+| `.agent-presets/redteam/` | 红队模式预设落地位置 |
+| `<文件>.dshpurge.bak` | 每个被改文件的备份 |
+
+---
+
+## 7️⃣ 本仓库说明（Fork 信息）
+
+| 项目 | 说明 |
+|------|------|
+| **本仓库** | `aiwozhonghua81/dsh-purge` |
+| **上游项目** | [`ZiPengWei/dsh-purge`](https://github.com/ZiPengWei/dsh-purge) |
+| **项目名** | dsh-purge（DeepSeek Harness 网络安全红队工具） |
+| **关系** | **Fork（派生仓库）** |
+| **当前分支** | `master` |
+| **当前版本** | 1.1.71 |
+| **上游原始作者** | 叫我小杨同学 / yang（提交邮箱 `a2269198325@163.com`） |
+
+### 关于这个 fork 到底「改了什么」（实测数据）
+
+用 `git rev-list --left-right --count upstream/master...master` 对比本地 `master` 与上游 `master`：
+
+```
+4      236
+↑      ↑
+上游   本地
+独有   独有
+4 个   236 个
+```
+
+并且 `git merge-base master upstream/master` **返回空**（退出码 1）——**两条历史没有共同祖先**。
+
+这说明：
+
+| 事实 | 说明 |
+|------|------|
+| **上游 `ZiPengWei/dsh-purge` 只是个早期快照** | 它只有 **13 个文件**、**4 个提交**，最后提交时间 2026-08-19，内容是"3 层结构、8 个补丁、自动重应用"的最初版本 |
+| **本 fork 保存的是项目的完整演进历史** | **236 个提交**，覆盖从最初版本到 1.1.71 的全过程，作者全是原作者本人（`叫我小杨同学` 198 次、`yang` 24 次）加社区贡献者（fomaper、Musan-34、zksnet 等） |
+| **两边不是"落后/领先"，而是"从第 5 个提交就分家了"** | 上游把仓库地址改到了 `YuJunZhiXue/dsh-purge`（该仓库现已不可访问），而本 fork 沿用了原作者的完整后续历史 |
+| **本 fork 相对上游的实际差异** | **120 个文件、+56383 行 / -982 行**。主要内容：新增 `lib/redteam/`（17 个文件，演练台全套）、`skills/redteam/`（23 个技能）、`presets/redteam/`、`scripts/`（4 个构建与安装脚本）、`docs/notice/`、`docs/preview/`（8 张界面截图）、三语 README、`LICENSE-COMMERCIAL.md`，以及 `client.js`（+8847 行）、`lib/core.js`（+8768 行）、`lib/index.js`（+2407 行）的大幅重构 |
+| **本 fork 自己的作者** | **提交历史里没有任何 `Quincy` / `aiwozhonghua81` 的提交**。也就是说，**本 fork 目前是原项目完整历史的镜像，代码本身不是本 fork 作者改的** |
+
+### 换句话说
+
+- ✅ 本 fork 的价值在于：**把原项目完整、连续、包含全部后续修复（1.1.40 → 1.1.71）的历史保存了下来**。上游 `ZiPengWei/dsh-purge` 那个 13 文件的快照已经停在 8 月，**没有 1.1.71 的任何修复**（比如 1.1.37 的桌面端超时窗口、1.1.70 的 `??`/`||` 混用修复、1.1.71 收回 steer 误伤等）。
+- ✅ 本 fork 唯一由我们添加的内容是 **README 顶部的这段中文详细说明**（以及仓库 description 里补的中文注解）。
+- ⚠️ 要注意上游 README 里的**法律状态**：原项目作者已于 2026-10-27 宣布闭源，新版本只走 Telegram 频道；本 fork 保留的是**当时在 GitHub 上公开的那一版（1.1.71）**。
+- ⚠️ **署名要求依然有效**：使用本项目的名称、思路、代码或提示词，必须署名并写明来源仓库（原项目地址 `YuJunZhiXue/dsh-purge`，现已不可访问；本 fork 地址 `aiwozhonghua81/dsh-purge`）。
+- ⚠️ **许可证已改**：本分支挂的是**商业软件许可**，不是 MIT。要付费卖 / 卖课 / 白标，先看 `LICENSE-COMMERCIAL.md`。
+
+### 上游项目简介
+
+> **dsh-purge** 是一个装在官方 DeepSeek Harness 上的插件，用来在**你自己的机器**上做网络安全红队评测。作者写了两块东西：**「清洗」**（给 Harness 打补丁、换提示词、管规则集和 Skill，把宿主拦截和模型拒绝分成两层看）和**「演练台」**（授权后可用，管理资产、加载 23 个红队技能、跑攻防流程）。
+>
+> 官方 Web（`dsh web`）和官方桌面 EXE 都支持，但**两边分开安装、分开点「应用」**。作者强调：这不是公网扫描器，仓库里没有木马，也没有对外攻击载荷。
+
+### 本 README 的结构
+
+```
+第 1 行
+├── <!-- 中文说明开始 -->
+│   ├── 1️⃣ 这是什么？
+│   ├── 2️⃣ 适合谁用 / 能解决什么问题
+│   ├── 3️⃣ 核心功能
+│   ├── 4️⃣ 怎么快速上手
+│   ├── 5️⃣ 常见问题 / 注意事项
+│   ├── 6️⃣ 目录结构速览
+│   └── 7️⃣ 本仓库说明（Fork 信息）  ← 你正在看的最后一段
+├── <!-- 中文说明结束 -->
+│
+├── （分隔线）
+│
+└── ↑↑↑ 从这里开始，是上游项目 ZiPengWei/dsh-purge 的原始 README，一字未改 ↑↑↑
+```
+
+上游 README 里还有**界面截图**（`docs/preview/` 下 8 张）、**工作原理的 Mermaid 流程图**、**许可证全文**和**违规商用公示**，本 fork 一并保留。
+
+---
+
+<!-- 中文说明结束 -->
+
+---
+
 <p align="center">
   <img src="docs/banner.svg" alt="dsh-purge" width="720">
 </p>
